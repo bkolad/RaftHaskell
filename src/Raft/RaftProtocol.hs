@@ -107,7 +107,6 @@ term.
 -}
 candidateService :: Int -> [ProcessId] -> Process()
 candidateService localTerm peers = do
---    say "CSERVICE"
     timeout <- getTimeout
     sPid <- getSelfPid
     {-Vote for self-}
@@ -134,7 +133,6 @@ candidate timeout peers localTerm votes = do
             candidateService localTerm peers
         Just m -> case  m of
             ReqVoteRPC rv -> do
-        --        say "Req"
                 if (termRV rv > localTerm)
                     then
                         {- If RPC request or response contains term T > currentTerm:
@@ -145,14 +143,12 @@ candidate timeout peers localTerm votes = do
 
             RspVoteRPC sv -> do
                 let ns = transit2NewState localTerm votes peers sv
-        --        say $ "Cand  " ++ ( show localTerm) ++"  " ++ (show sv) ++ " "++(show votes)
                 case ns of
                     (True, _) ->
                         {- If votes received from majority of servers:
                         become leader-}
                         leadrService localTerm peers
                     (False, newVotes) -> do
-        --                say $ "NVOTES  " ++ (show newVotes) ++ " "++(show localTerm) ++"  "++(show (sv))
                         candidate timeout peers localTerm newVotes
 
             AppendEntriesRPC (HeartBeat term) -> do
@@ -162,13 +158,11 @@ candidate timeout peers localTerm votes = do
                         least as large as the candidate’s current term,
                         then the candidate recognizes the leader as legitimate
                         and returns to follower state -}
-            --            say "TOFOLOOOOWER"
                         followerService term peers
                     else do
                         {- If the term in the RPC is smaller than the candidate’s
                         current term, then the candidate rejects the RPC and
                         continues in candidate state -}
-            --            say "BUUUUUU"
                         candidate timeout peers localTerm votes
 
 
