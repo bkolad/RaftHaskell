@@ -16,14 +16,14 @@ clientConf = ("localhost", "44444")
 raftsNodeConf = [ ("localhost", "44445")
                 , ("localhost", "44446")
                 , ("localhost", "44447")
-                , ("localhost", "44448")
+            {--    , ("localhost", "44448")
                 , ("localhost", "44449")
                 , ("localhost", "44450")
                 , ("localhost", "44451")
                 , ("localhost", "44452")
                 , ("localhost", "44453")
                 , ("localhost", "44454")
-                , ("localhost", "44455")
+                , ("localhost", "44455") --}
                 ]
 
 
