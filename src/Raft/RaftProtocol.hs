@@ -100,11 +100,11 @@ compareTerms (Term remoteTerm) (Term currentTerm)
 start :: Process()
 start = do
     Peers peers <- expect :: Process Peers
-    followerService (Term 0) peers
+    followerService (Term 0) False peers
 
 
-followerService :: Term Current -> [ProcessId]-> Process()
-followerService currentTerm peers = do
+followerService :: Term Current -> Bool -> [ProcessId]-> Process()
+followerService currentTerm voted peers = do
     timeout <- getTimeout
     follower timeout currentTerm False peers
 
@@ -141,7 +141,7 @@ follower timeout currentTerm voted peers = do
                         {- Ohh I am lagging behind. I need to update my Term
                         and vote yes! -}
                         sendVoteRPC rv remoteTerm True
-                        followerService (remmote2Current remoteTerm) peers
+                        followerService (remmote2Current remoteTerm) True peers
 
             AppendEntriesRPC (HeartBeat remoteTerm) ->
                 follower timeout (remmote2Current remoteTerm) voted peers
@@ -190,11 +190,6 @@ candidate timeout peers currentTerm votes = do
     case mMsg of
         Nothing -> do
             {- If election timeout elapses: start new election-}
-            {- if many followers become candidates at the same time, votes could
-               be split so that no candidate obtains a majority. When this happens,
-               each candidate  will time out and start a new election by
-               incrementing its term and initiating another round of RequestVote
-               RPCs -}
             candidateService currentTerm peers
         Just m -> case  m of
             ReqVoteRPC rv -> do
@@ -203,7 +198,7 @@ candidate timeout peers currentTerm votes = do
                   set currentTerm = T, convert to follower (§5.1-}
                 case compareTerms remoteTerm currentTerm of
                     CurrentTermObsolete ->
-                        followerService (remmote2Current remoteTerm) peers
+                        followerService (remmote2Current remoteTerm) False peers
 
                     termsEqualOrRemoteObsolete ->
                         candidate timeout peers currentTerm votes
@@ -214,7 +209,7 @@ candidate timeout peers currentTerm votes = do
                     isVoteGranted = voteGrantedSV sv
                 case compareTerms remoteTerm currentTerm of
                     CurrentTermObsolete ->
-                        followerService (remmote2Current remoteTerm) peers
+                        followerService (remmote2Current remoteTerm) False peers
 
                     termsEqualOrRemoteObsolete -> do
                         let newVotes = if isVoteGranted then votes +1 else votes
@@ -223,6 +218,11 @@ candidate timeout peers currentTerm votes = do
                             then
                                 leadrService currentTerm peers
                             else
+                                {- if many followers become candidates at the same time, votes could
+                                   be split so that no candidate obtains a majority. When this happens,
+                                   each candidate  will time out and start a new election by
+                                   incrementing its term and initiating another round of RequestVote
+                                   RPCs -}
                                 candidate timeout peers currentTerm newVotes
 
             {- AppendEntriesRPC are send only by leaders-}
@@ -239,7 +239,7 @@ candidate timeout peers currentTerm votes = do
                            least as large as the candidate’s current term,
                            then the candidate recognizes the leader as legitimate
                            and returns to follower state -}
-                        followerService (remmote2Current remoteTerm) peers
+                        followerService (remmote2Current remoteTerm) False peers
 
 
 
