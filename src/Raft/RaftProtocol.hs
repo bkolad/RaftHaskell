@@ -190,6 +190,12 @@ candidate timeout peers currentTerm votes = do
     case mMsg of
         Nothing -> do
             {- If election timeout elapses: start new election-}
+            {- if many followers become candidates at the same time, votes could
+               be split so that no candidate obtains a majority. When this happens,
+               each candidate  will time out and start a new election by
+               incrementing its term and initiating another round of RequestVote
+               RPCs -}
+        
             candidateService currentTerm peers
         Just m -> case  m of
             ReqVoteRPC rv -> do
@@ -218,11 +224,6 @@ candidate timeout peers currentTerm votes = do
                             then
                                 leadrService currentTerm peers
                             else
-                                {- if many followers become candidates at the same time, votes could
-                                   be split so that no candidate obtains a majority. When this happens,
-                                   each candidate  will time out and start a new election by
-                                   incrementing its term and initiating another round of RequestVote
-                                   RPCs -}
                                 candidate timeout peers currentTerm newVotes
 
             {- AppendEntriesRPC are send only by leaders-}
