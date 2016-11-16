@@ -31,9 +31,23 @@ startRaftService nid =
     spawn nid ($(mkStaticClosure 'Raft.start))
 
 
+
+observer peers = do
+    mapM_ monitor peers
+    go
+    where
+        go = do
+            ProcessMonitorNotification _ref deadpid reason <- expect
+            let msg = show deadpid ++ " " ++ show reason
+            say msg
+            go
+
+
 startRaft :: [LocalNode] -> Process () --[ProcessId]
 startRaft raftNodes =
     do peers <- mapM (startRaftService .localNodeId) raftNodes
+       spawnLocal $ observer peers
+
       -- liftIO $ print (show peers)
        mapM_ (\p -> send p (Raft.Peers peers)) peers
        return ()

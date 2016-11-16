@@ -71,7 +71,20 @@ data RspVote = RspVote
 instance Binary RspVote
 
 
-data AppendEntries = HeartBeat !(Term Remote)
+data Command = Command
+    deriving (Eq, Show, Typeable, Generic)
+
+instance Binary Command
+
+data AppendEntries = AppendEntries
+    { termAE       :: !(Term Remote)
+    , leaderId     :: !ProcessId
+    , prevLogIndex :: !Int
+    , prevLogTerm  :: !(Term Remote)
+    , entries      :: !(Maybe [Command]) --log entries to store (Nothing for heartbeat;
+    , leaderCommit :: !Int
+
+    }
     deriving (Eq, Show, Typeable, Generic)
 
 instance Binary AppendEntries
@@ -100,16 +113,16 @@ compareTerms (Term remoteTerm) (Term currentTerm)
 start :: Process()
 start = do
     Peers peers <- expect :: Process Peers
-    followerService (Term 0) False peers
+    followerService ((Term 0), False, []) peers
 
 
-followerService :: Term Current -> Bool -> [ProcessId]-> Process()
-followerService currentTerm voted peers = do
+followerService :: (Term Current, Bool, [Command]) -> [ProcessId]-> Process()
+followerService (currentTerm, voted, logEntries) peers = do
     timeout <- getTimeout
-    follower timeout currentTerm False peers
+    follower (currentTerm, False,[]) timeout peers
 
 
-follower timeout currentTerm voted peers = do
+follower (currentTerm, voted, logEntries) timeout peers = do
     mMsg <- expectTimeout timeout :: Process (Maybe RpcMsg)
     case mMsg of
         Nothing ->
@@ -122,7 +135,7 @@ follower timeout currentTerm voted peers = do
                 {- In the previous life I was candidate and I requested votes,
                    I dint' make it, now I am just follower and I am ignoring
                    recived votes -}
-                follower timeout currentTerm voted peers
+                follower (currentTerm, voted, logEntries) timeout peers
 
             {- The paper is vague about updating timeout for follower.
                Update it for the CurrentTermObsolete case-}
@@ -131,20 +144,20 @@ follower timeout currentTerm voted peers = do
                 case compareTerms remoteTerm currentTerm of
                     RemoteTermObsolete -> do
                         sendVoteRPC rv (current2Remote currentTerm) False
-                        follower timeout currentTerm voted peers
+                        follower (currentTerm, voted, logEntries) timeout peers
 
                     TermsEqual -> do
                         sendVoteRPC rv (current2Remote currentTerm) (not voted)
-                        follower timeout currentTerm True peers
+                        follower (currentTerm, True, logEntries) timeout peers
 
                     CurrentTermObsolete -> do
                         {- Ohh I am lagging behind. I need to update my Term
                         and vote yes! -}
                         sendVoteRPC rv remoteTerm True
-                        followerService (remmote2Current remoteTerm) True peers
+                        followerService ((remmote2Current remoteTerm), True, logEntries) peers
 
-            AppendEntriesRPC (HeartBeat remoteTerm) ->
-                follower timeout (remmote2Current remoteTerm) voted peers
+            AppendEntriesRPC ae ->
+                follower ((remmote2Current (termAE ae)), voted, logEntries) timeout peers
 
 sendVoteRPC :: RequestVote -> Term Remote -> Bool -> Process ()
 sendVoteRPC rv term voted =
@@ -184,7 +197,6 @@ candidateService term peers = do
 
 
 
-
 candidate timeout peers currentTerm votes = do
     mMsg <- expectTimeout timeout :: Process (Maybe RpcMsg)
     case mMsg of
@@ -195,7 +207,7 @@ candidate timeout peers currentTerm votes = do
                each candidate  will time out and start a new election by
                incrementing its term and initiating another round of RequestVote
                RPCs -}
-        
+
             candidateService currentTerm peers
         Just m -> case  m of
             ReqVoteRPC rv -> do
@@ -204,7 +216,7 @@ candidate timeout peers currentTerm votes = do
                   set currentTerm = T, convert to follower (§5.1-}
                 case compareTerms remoteTerm currentTerm of
                     CurrentTermObsolete ->
-                        followerService (remmote2Current remoteTerm) False peers
+                        followerService ((remmote2Current remoteTerm), False, undefined) peers
 
                     termsEqualOrRemoteObsolete ->
                         candidate timeout peers currentTerm votes
@@ -215,7 +227,7 @@ candidate timeout peers currentTerm votes = do
                     isVoteGranted = voteGrantedSV sv
                 case compareTerms remoteTerm currentTerm of
                     CurrentTermObsolete ->
-                        followerService (remmote2Current remoteTerm) False peers
+                        followerService ((remmote2Current remoteTerm), False, undefined) peers
 
                     termsEqualOrRemoteObsolete -> do
                         let newVotes = if isVoteGranted then votes +1 else votes
@@ -227,7 +239,9 @@ candidate timeout peers currentTerm votes = do
                                 candidate timeout peers currentTerm newVotes
 
             {- AppendEntriesRPC are send only by leaders-}
-            AppendEntriesRPC (HeartBeat remoteTerm) ->
+            AppendEntriesRPC ae ->
+                let remoteTerm = termAE ae
+                in
                 case compareTerms remoteTerm currentTerm of
                     RemoteTermObsolete ->
                         {- If the term in the RPC is smaller than the candidate’s
@@ -240,7 +254,7 @@ candidate timeout peers currentTerm votes = do
                            least as large as the candidate’s current term,
                            then the candidate recognizes the leader as legitimate
                            and returns to follower state -}
-                        followerService (remmote2Current remoteTerm) False peers
+                        followerService ((remmote2Current remoteTerm), False, undefined) peers
 
 
 
@@ -253,7 +267,7 @@ send2All peers msg =
 
 
 heartBeat peers currentTerm =
-    send2All peers (AppendEntriesRPC $ HeartBeat currentTerm)
+    send2All peers (AppendEntriesRPC $ AppendEntries currentTerm undefined undefined undefined undefined undefined)
 
 
 getTimeout = do
@@ -266,7 +280,9 @@ leadrService currentTerm peers = do
     {- Upon election: send initial empty AppendEntries RPCs
     (heartbeat) to each server; repeat during idle periods to
     prevent election timeouts (§5.2)-}
+    say $ "I am leader !!!00"
+
     heartBeat peers (current2Remote currentTerm)
     sPid <- getSelfPid
-    say $ "I am leader !!!"
+    say $ "I am leader !!! ------- "
     return ()
