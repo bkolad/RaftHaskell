@@ -334,16 +334,6 @@ convertToFreshFollower remoteTerm logEntries (nextIndex, matchIndex) peers   =
     followerService ((remmote2Current remoteTerm), False, logEntries) (nextIndex, matchIndex)  peers
 
 
-{- If RPC request or response contains term T > currentTerm:
-  set currentTerm = T, convert to follower (§5.1-}
-
-stayOrConvert2Follower (remoteTerm, currentTerm, logEntries) me (nextIndex, matchIndex)  peers =
-    case compareTerms remoteTerm currentTerm of
-        CurrentTermObsolete ->
-            followerService ((remmote2Current remoteTerm), False, logEntries) (nextIndex, matchIndex) peers
-
-        termsEqualOrRemoteObsolete -> me
-
 
 
 --expectWithTimeout :: Int
