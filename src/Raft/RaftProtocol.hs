@@ -6,113 +6,15 @@
 
 module Raft.RaftProtocol where
 
-
-import Control.Distributed.Process
 import Control.Distributed.Process.Node
 import qualified Control.Distributed.Process.Extras.Timer as T
 import qualified Control.Distributed.Process.Extras.Time as T
 import Data.Time.Clock as T
 
 
-import Data.Binary
-import Data.Typeable (Typeable)
-import GHC.Generics (Generic)
 import qualified System.Random as R
 
-data Peers = Peers ![ProcessId]
-    deriving (Eq, Show, Typeable, Generic)
-
-instance Binary Peers
-
-
-data Current
-data Remote
-
--- Phantom Type
-data Term a = Term !Int
-    deriving (Eq, Show, Typeable, Generic)
-
---transfer2Remote :: Term Transfer -> Term Remote
---transfer2Remote (Term t) = Term t
-
-remmote2Current :: Term Remote -> Term Current
-remmote2Current (Term t) = Term t
-
---remmote2Transfer :: Term Remote -> Term Transfer
---remmote2Transfer (Term t) = Term t
-
-current2Remote :: Term Current -> Term Remote
-current2Remote (Term t) = Term t
-
---current2Transfer :: Term Current -> Term Transfer
---current2Transfer (Term t) = Term t
-
-
-instance Binary (Term a)
-
-data RequestVote = RequestVote
-          { termRV         :: !(Term Remote)
-          , candidateIdRV  :: !ProcessId
-          , lastLogIndexRV :: !Int
-          , lastLogTermRV  :: !Int
-          }
-          deriving (Eq, Show, Typeable, Generic)
-
-
-instance Binary RequestVote
-
-
-data RspVote = RspVote
-              { termSV        :: !(Term Remote)
-              , voteGrantedSV :: !Bool
-              }
-              deriving (Eq, Show, Typeable, Generic)
-
-
-instance Binary RspVote
-
-
-data Command = Command
-    deriving (Eq, Show, Typeable, Generic)
-
-instance Binary Command
-
-data AppendEntries = AppendEntries
-    { termAE       :: !(Term Remote) -- TODO refactor term
-    , leaderId     :: !ProcessId
-    , prevLogIndex :: !Int
-    , prevLogTerm  :: !(Term Remote)
-    , entries      :: !(Maybe [(Term Remote, Command)]) --log entries to store (Nothing for heartbeat;
-    , leaderCommit :: !Int
-
-    }
-    deriving (Eq, Show, Typeable, Generic)
-
-instance Binary AppendEntries
-
-
-data RpcMsg = ReqVoteRPC RequestVote
-            | RspVoteRPC RspVote
-            | AppendEntriesRPC AppendEntries
-            deriving (Eq, Show, Typeable, Generic)
-
-
-instance Binary RpcMsg
-
-data TermComparator = RemoteTermObsolete
-                    | TermsEqual
-                    | CurrentTermObsolete
-
-compareTerms :: Term Remote -> Term Current -> TermComparator
-compareTerms (Term remoteTerm) (Term currentTerm)
-    | currentTerm >  remoteTerm = RemoteTermObsolete
-    | currentTerm == remoteTerm = TermsEqual
-    | currentTerm <  remoteTerm = CurrentTermObsolete
-
-type RaftPersistentState = (Term Current, Bool, [Command])
-type RaftVolatileState = (Int, Int)
-
-
+import Raft.Types
 
 start :: Process()
 start = do
@@ -126,9 +28,12 @@ followerService (currentTerm, voted, logEntries) (commitIndex, lastApplied) peer
     follower (currentTerm, False,[])  (commitIndex, lastApplied) timeout peers
 
 
+
+
 follower :: RaftPersistentState -> RaftVolatileState -> Int -> [ProcessId]-> Process()
 follower (currentTerm, voted, logEntries) (commitIndex, lastApplied) timeout peers = do
     mMsg <- expectTimeout timeout :: Process (Maybe RpcMsg)
+
     case mMsg of
         Nothing ->
             {- If election timeout elapses without receiving AppendEntries
