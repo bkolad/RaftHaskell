@@ -109,38 +109,41 @@ compareTerms (Term remoteTerm) (Term currentTerm)
     | currentTerm == remoteTerm = TermsEqual
     | currentTerm <  remoteTerm = CurrentTermObsolete
 
+type RaftPersistentState = (Term Current, Bool, [Command])
+type RaftVolatileState = (Int, Int)
+
 
 
 start :: Process()
 start = do
     Peers peers <- expect :: Process Peers
-    followerService ((Term 0), False, []) ([],[]) peers
+    followerService ((Term 0), False, []) (0,0) peers
 
 
-followerService :: (Term Current, Bool, [Command]) -> ([Int], [Int]) -> [ProcessId]-> Process()
-followerService (currentTerm, voted, logEntries) (nextIndex, matchIndex) peers = do
+followerService :: RaftPersistentState -> RaftVolatileState -> [ProcessId]-> Process()
+followerService (currentTerm, voted, logEntries) (commitIndex, lastApplied) peers = do
     timeout <- getTimeout
-    follower (currentTerm, False,[]) (nextIndex, matchIndex) timeout peers
+    follower (currentTerm, False,[])  (commitIndex, lastApplied) timeout peers
 
 
-follower :: (Term Current, Bool, [Command]) -> ([Int], [Int]) -> Int -> [ProcessId]-> Process()
-follower (currentTerm, voted, logEntries) (nextIndex, matchIndex) timeout peers = do
+follower :: RaftPersistentState -> RaftVolatileState -> Int -> [ProcessId]-> Process()
+follower (currentTerm, voted, logEntries) (commitIndex, lastApplied) timeout peers = do
     mMsg <- expectTimeout timeout :: Process (Maybe RpcMsg)
     case mMsg of
         Nothing ->
             {- If election timeout elapses without receiving AppendEntries
                RPC from current leader or granting vote to candidate: convert
                to candidate -}
-            candidateService (currentTerm, voted, logEntries) (nextIndex, matchIndex) peers
+            candidateService (currentTerm, voted, logEntries)  (commitIndex, lastApplied) peers
         Just m  -> case m of
             RspVoteRPC rs -> do
                 let remoteTerm = termSV rs
                 case compareTerms remoteTerm currentTerm of
                     CurrentTermObsolete ->
-                        followerService ((remmote2Current remoteTerm), False, logEntries) (nextIndex, matchIndex) peers
+                        followerService ((remmote2Current remoteTerm), False, logEntries)  (commitIndex, lastApplied) peers
 
                     termsEqualOrRemoteObsolete ->
-                        follower (currentTerm, voted, logEntries) (nextIndex, matchIndex) timeout peers
+                        follower (currentTerm, voted, logEntries)  (commitIndex, lastApplied) timeout peers
 
 
             {- The paper is vague about updating timeout for follower.
@@ -150,23 +153,23 @@ follower (currentTerm, voted, logEntries) (nextIndex, matchIndex) timeout peers 
                 case compareTerms remoteTerm currentTerm of
                     RemoteTermObsolete -> do
                         sendVoteRPC rv (current2Remote currentTerm) False
-                        follower (currentTerm, voted, logEntries) (nextIndex, matchIndex) timeout peers
+                        follower (currentTerm, voted, logEntries)  (commitIndex, lastApplied) timeout peers
 
                     -- TODO If election timeout elapses without receiving
                     -- AppendEntries RPC from current leader or granting vote
                     -- to candidate: convert to candidate. NOT EVRY TIME I GET REQVOT
                     TermsEqual -> do
                         sendVoteRPC rv (current2Remote currentTerm) (not voted)
-                        follower (currentTerm, True, logEntries) (nextIndex, matchIndex) timeout peers
+                        follower (currentTerm, True, logEntries)  (commitIndex, lastApplied) timeout peers
 
                     CurrentTermObsolete -> do
                         {- Ohh I am lagging behind. I need to update my Term
                         and vote yes! -}
                         sendVoteRPC rv remoteTerm True
-                        followerService ((remmote2Current remoteTerm), True, logEntries) (nextIndex, matchIndex) peers
+                        followerService ((remmote2Current remoteTerm), True, logEntries)  (commitIndex, lastApplied) peers
 
             AppendEntriesRPC ae ->
-                follower ((remmote2Current (termAE ae)), voted, logEntries) (nextIndex, matchIndex) timeout peers
+                follower ((remmote2Current (termAE ae)), voted, logEntries) (commitIndex, lastApplied) timeout peers
 
 sendVoteRPC :: RequestVote -> Term Remote -> Bool -> Process ()
 sendVoteRPC rv term voted =
@@ -179,8 +182,8 @@ A candidate wins an election if it receives votes from
 a majority of the servers in the full cluster for the same
 term.
 -}
-candidateService :: (Term Current, Bool, [Command]) -> ([Int], [Int]) -> [ProcessId] -> Process()
-candidateService (term, voted, logEntries) (nextIndex, matchIndex) peers = do
+candidateService :: RaftPersistentState -> RaftVolatileState -> [ProcessId] -> Process()
+candidateService (term, voted, logEntries)  (commitIndex, lastApplied) peers = do
     timeout <- getTimeout
     sPid <- getSelfPid
     let currentTerm = succTerm term
@@ -190,7 +193,7 @@ candidateService (term, voted, logEntries) (nextIndex, matchIndex) peers = do
     sendReqVote2All sPid (current2Remote currentTerm) 0 0 peers
     {- Increment currentTerm
        Reset election timer -}
-    candidate (currentTerm, True, logEntries) (nextIndex, matchIndex) 0 timeout peers
+    candidate (currentTerm, True, logEntries) (commitIndex, lastApplied) 0 timeout peers
     where
         sendReqVote2All sPid currentTerm ll1 ll2 peers = do
             let msg = ReqVoteRPC $ RequestVote currentTerm sPid ll1 ll2
@@ -205,8 +208,8 @@ candidateService (term, voted, logEntries) (nextIndex, matchIndex) peers = do
 
 
 
-candidate :: (Term Current, Bool, [Command]) -> ([Int], [Int]) -> Int -> Int->[ProcessId] -> Process()
-candidate (currentTerm, voted, logEntries) (nextIndex, matchIndex) votes timeout peers = do
+candidate :: RaftPersistentState -> RaftVolatileState -> Int -> Int->[ProcessId] -> Process()
+candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) votes timeout peers = do
     mMsg <- expectTimeout timeout :: Process (Maybe RpcMsg)
     case mMsg of
         Nothing -> do
@@ -217,7 +220,7 @@ candidate (currentTerm, voted, logEntries) (nextIndex, matchIndex) votes timeout
                incrementing its term and initiating another round of RequestVote
                RPCs -}
 
-            candidateService (currentTerm,voted, logEntries) (nextIndex, matchIndex) peers
+            candidateService (currentTerm,voted, logEntries)  (commitIndex, lastApplied) peers
 
         Just m -> case  m of
             RspVoteRPC sv -> do  -- TODO extrabt term to (Term, RCPMsg and pattern match)
@@ -225,7 +228,7 @@ candidate (currentTerm, voted, logEntries) (nextIndex, matchIndex) votes timeout
                     isVoteGranted = voteGrantedSV sv
                 case compareTerms remoteTerm currentTerm of
                     CurrentTermObsolete ->
-                        convertToFreshFollower remoteTerm logEntries (nextIndex, matchIndex)  peers
+                        convertToFreshFollower remoteTerm logEntries  (commitIndex, lastApplied)  peers
 
                     termsEqualOrRemoteObsolete -> do
                         let newVotes = if isVoteGranted then votes +1 else votes
@@ -234,7 +237,7 @@ candidate (currentTerm, voted, logEntries) (nextIndex, matchIndex) votes timeout
                             then
                                 leadrService currentTerm peers
                             else
-                                candidate (currentTerm, voted, logEntries) (nextIndex, matchIndex) newVotes timeout peers
+                                candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) newVotes timeout peers
 
 
             ReqVoteRPC rv -> do
@@ -243,11 +246,11 @@ candidate (currentTerm, voted, logEntries) (nextIndex, matchIndex) votes timeout
                   set currentTerm = T, convert to follower (§5.1-}
                 case compareTerms remoteTerm currentTerm of
                     CurrentTermObsolete ->
-                        convertToFreshFollower remoteTerm logEntries (nextIndex, matchIndex) peers
+                        convertToFreshFollower remoteTerm logEntries  (commitIndex, lastApplied) peers
 
 
                     termsEqualOrRemoteObsolete ->
-                        candidate (currentTerm, voted, logEntries) (nextIndex, matchIndex) votes timeout peers
+                        candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) votes timeout peers
 
 
             {- AppendEntriesRPC are send only by leaders-}
@@ -258,14 +261,14 @@ candidate (currentTerm, voted, logEntries) (nextIndex, matchIndex) votes timeout
                         {- If the term in the RPC is smaller than the candidate’s
                            current term, then the candidate rejects the RPC and
                            continues in candidate state -}
-                        candidate (currentTerm, voted, logEntries) (nextIndex, matchIndex) votes timeout peers
+                        candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) votes timeout peers
 
                     termsEqualOrCurrentObstole ->
                         {- If the leader’s term (included in its RPC) is at
                            least as large as the candidate’s current term,
                            then the candidate recognizes the leader as legitimate
                            and returns to follower state -}
-                        convertToFreshFollower remoteTerm logEntries (nextIndex, matchIndex)  peers
+                        convertToFreshFollower remoteTerm logEntries (commitIndex, lastApplied)  peers
 
 
 
@@ -300,7 +303,7 @@ leadrService currentTerm peers = do
     return ()
 
 
-leader st@(currentTerm, logEntries) (nextIndex, matchIndex) peers = do
+leader st@(currentTerm, logEntries) (commitIndex, lastApplied) (nextIndex, matchIndex) peers = do
     mMsg <- expect :: Process RpcMsg
     case mMsg of
         RspVoteRPC rs -> do
@@ -313,7 +316,7 @@ leader st@(currentTerm, logEntries) (nextIndex, matchIndex) peers = do
 
 
                 termsEqualOrRemoteObsolete ->
-                    leader st (nextIndex, matchIndex) peers
+                    leader st  (commitIndex, lastApplied) (nextIndex, matchIndex) peers
 
 
         ReqVoteRPC rv -> do
@@ -323,7 +326,7 @@ leader st@(currentTerm, logEntries) (nextIndex, matchIndex) peers = do
                     convertToFreshFollower remoteTerm logEntries (nextIndex, matchIndex)  peers
 
                 termsEqualOrRemoteObsolete ->
-                    leader st (nextIndex, matchIndex) peers
+                    leader st  (commitIndex, lastApplied) (nextIndex, matchIndex) peers
 
 
         AppendEntriesRPC ae -> do
