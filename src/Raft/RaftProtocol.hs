@@ -23,17 +23,15 @@ start = do
     followerService ((Term 0), False, []) (0,0) context peers
 
 
-followerService :: RaftPersistentState -> RaftVolatileState -> Context a -> [ProcessId]-> Process()
+followerService :: RaftPersistentState -> RaftVolatileState -> Context a -> [ProcessId] -> Process()
 followerService (currentTerm, voted, logEntries) (commitIndex, lastApplied) ctx peers = do
     timeout <- getTimeout
-    follower (currentTerm, False,[])  (commitIndex, lastApplied) timeout ctx peers
+    follower (currentTerm, False,[])  (commitIndex, lastApplied) ctx peers timeout
 
 
-follower :: RaftPersistentState -> RaftVolatileState -> Int -> Context a ->[ProcessId]-> Process()
-follower (currentTerm, voted, logEntries) (commitIndex, lastApplied) timeout ctx peers = do
-    mMsg <- expectMsgTimeout ctx timeout-- raftTimeout timeout--expectTimeout timeout  :: Process (Maybe (RaftMsg a))
-    --kk <- expectTimeout timeout  :: ((Typeable a, Binary a) => Process (Maybe (RaftMsg a)))
---    sendRaftMsg mMsg
+follower :: RaftPersistentState -> RaftVolatileState -> Context a ->[ProcessId] -> Int -> Process()
+follower (currentTerm, voted, logEntries) (commitIndex, lastApplied) ctx peers timeout = do
+    mMsg <- expectMsgTimeout ctx timeout
     case mMsg of
         Nothing ->
             {- If election timeout elapses without receiving AppendEntries
@@ -51,7 +49,7 @@ follower (currentTerm, voted, logEntries) (commitIndex, lastApplied) timeout ctx
 
 
                     termsEqualOrRemoteObsolete ->
-                        follower (currentTerm, voted, logEntries)  (commitIndex, lastApplied) timeout ctx peers
+                        follower (currentTerm, voted, logEntries)  (commitIndex, lastApplied) ctx peers timeout
 
 
             {- The paper is vague about updating timeout for follower.
@@ -60,34 +58,31 @@ follower (currentTerm, voted, logEntries) (commitIndex, lastApplied) timeout ctx
                 let remoteTerm = termRV rv
                 case compareTerms remoteTerm currentTerm of
                     RemoteTermObsolete -> do
-                        sendVoteRPC rv (current2Remote currentTerm) False
-                        follower (currentTerm, voted, logEntries)  (commitIndex, lastApplied) timeout ctx peers
+                        sendVoteRPC ctx rv (current2Remote currentTerm) False
+                        follower (currentTerm, voted, logEntries)  (commitIndex, lastApplied) ctx peers timeout
 
                     -- TODO If election timeout elapses without receiving
                     -- AppendEntries RPC from current leader or granting vote
                     -- to candidate: convert to candidate. NOT EVRY TIME I GET REQVOT
                     TermsEqual -> do
-                        sendVoteRPC rv (current2Remote currentTerm) (not voted)
-                        follower (currentTerm, True, logEntries)  (commitIndex, lastApplied) timeout ctx peers
+                        sendVoteRPC ctx rv (current2Remote currentTerm) (not voted)
+                        follower (currentTerm, True, logEntries)  (commitIndex, lastApplied) ctx peers timeout
 
                     CurrentTermObsolete -> do
                         {- Ohh I am lagging behind. I need to update my Term
                         and vote yes! -}
-                        sendVoteRPC rv remoteTerm True
+                        sendVoteRPC ctx rv remoteTerm True
                         followerService ((remmote2Current remoteTerm), True, logEntries)  (commitIndex, lastApplied) ctx peers
 
             AppendEntriesRPC ae ->
-                follower ((remmote2Current (termAE ae)), voted, logEntries) (commitIndex, lastApplied) timeout ctx peers
-
--- TODO TYPECLASS
-
---class Den
+                follower ((remmote2Current (termAE ae)), voted, logEntries) (commitIndex, lastApplied) ctx peers timeout
 
 
-sendVoteRPC :: RequestVote -> Term Remote -> Bool -> Process ()
-sendVoteRPC rv term voted = do
-    let msg =  Rpc $ RspVoteRPC $ RspVote term voted :: RaftMsg Command
-    send (candidateIdRV rv) msg
+
+sendVoteRPC :: Context a -> RequestVote -> Term Remote -> Bool -> Process ()
+sendVoteRPC ctx rv term voted = do
+    let msg =  Rpc $ RspVoteRPC $ RspVote term voted
+    sendRaftMsg ctx (candidateIdRV rv) msg
 
 
 
@@ -107,7 +102,7 @@ candidateService (term, voted, logEntries)  (commitIndex, lastApplied) ctx peers
     sendReqVote2All sPid (current2Remote currentTerm) 0 0 peers
     {- Increment currentTerm
        Reset election timer -}
-    candidate (currentTerm, True, logEntries) (commitIndex, lastApplied) 0 timeout ctx peers
+    candidate (currentTerm, True, logEntries) (commitIndex, lastApplied) ctx peers 0 timeout
     where
         sendReqVote2All sPid currentTerm ll1 ll2 peers = do
             let msg = Rpc $ ReqVoteRPC $ RequestVote currentTerm sPid ll1 ll2
@@ -122,8 +117,8 @@ candidateService (term, voted, logEntries)  (commitIndex, lastApplied) ctx peers
 
 
 
-candidate :: RaftPersistentState -> RaftVolatileState -> Int -> Int-> Context a -> [ProcessId] -> Process()
-candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) votes timeout ctx peers = do
+candidate :: RaftPersistentState -> RaftVolatileState ->  Context a -> [ProcessId] -> Int -> Int -> Process()
+candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) ctx peers votes timeout = do
     mMsg <- expectMsgTimeout ctx timeout -- expectTimeout timeout :: Process (Maybe RaftMsg)
     case mMsg of
         Nothing -> do
@@ -153,7 +148,7 @@ candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) votes tim
                             then
                                 leadrService currentTerm ctx peers
                             else
-                                candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) newVotes timeout ctx peers
+                                candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) ctx peers newVotes timeout
 
 
             ReqVoteRPC rv -> do
@@ -166,7 +161,7 @@ candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) votes tim
 
 
                     termsEqualOrRemoteObsolete ->
-                        candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) votes timeout ctx peers
+                        candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) ctx peers votes timeout
 
 
             {- AppendEntriesRPC are send only by leaders-}
@@ -177,7 +172,7 @@ candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) votes tim
                         {- If the term in the RPC is smaller than the candidate’s
                            current term, then the candidate rejects the RPC and
                            continues in candidate state -}
-                        candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) votes timeout ctx peers
+                        candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) ctx peers votes timeout
 
                     termsEqualOrCurrentObstole ->
                         {- If the leader’s term (included in its RPC) is at
