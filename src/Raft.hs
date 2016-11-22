@@ -11,14 +11,13 @@ import Control.Distributed.Process.Node
 import Network.Transport.TCP (createTransport, defaultTCPParameters)
 import Control.Distributed.Process.Extras.Timer as T
 import Control.Distributed.Process.Extras.Time as T
-
+import Raft.Types
 
 import Data.Binary
 import Data.Typeable (Typeable)
 import GHC.Generics (Generic)
 
 import qualified Raft.RaftProtocol as Raft
-import Raft.Types
 
 
 remotable ['Raft.start]
@@ -47,7 +46,7 @@ observer peers = do
 startRaft :: [LocalNode] -> Process () --[ProcessId]
 startRaft raftNodes =
     do peers <- mapM (startRaftService .localNodeId) raftNodes
-       spawnLocal $ observer peers
+       spawnLocal (observer peers)
 
       -- liftIO $ print (show peers)
        mapM_ (\p -> send p (Peers peers)) peers

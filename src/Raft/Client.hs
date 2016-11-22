@@ -11,7 +11,7 @@ clientService ps@(Peers peers) = do
     let peer = peers !! r
     let x = 33 :: Int
     send peer x
-    mA <- expectTimeout 1000 :: Process (Maybe Int)
+    mA <- expectTimeout 1000 :: Process (Maybe CommandData)
     case mA of
         Nothing ->
             clientService ps
