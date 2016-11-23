@@ -23,13 +23,13 @@ start = do
     followerService ((Term 0), False, []) (0,0) context peers
 
 
-followerService :: RaftPersistentState -> RaftVolatileState -> Context a -> [ProcessId] -> Process()
+followerService :: RaftPersistentState -> RaftVolatileState -> Context a b -> [ProcessId] -> Process()
 followerService (currentTerm, voted, logEntries) (commitIndex, lastApplied) ctx peers = do
     timeout <- getTimeout
     follower (currentTerm, False,[])  (commitIndex, lastApplied) ctx peers timeout
 
 
-follower :: RaftPersistentState -> RaftVolatileState -> Context a ->[ProcessId] -> Int -> Process()
+follower :: RaftPersistentState -> RaftVolatileState -> Context a b ->[ProcessId] -> Int -> Process()
 follower (currentTerm, voted, logEntries) (commitIndex, lastApplied) ctx peers timeout = do
     mMsg <- expectMsgTimeout ctx timeout
     case mMsg of
@@ -39,7 +39,11 @@ follower (currentTerm, voted, logEntries) (commitIndex, lastApplied) ctx peers t
                to candidate -}
             candidateService (currentTerm, voted, logEntries)  (commitIndex, lastApplied) ctx peers
 
-        Just (RaftCommand _) -> undefined
+        Just (RaftCommand _ _) -> do
+            liftIO $ print "FOLLOWER"
+            follower (currentTerm, voted, logEntries)  (commitIndex, lastApplied) ctx peers timeout
+
+
         Just (Rpc m)  -> case m of
             RspVoteRPC rs -> do
                 let remoteTerm = termSV rs
@@ -79,7 +83,7 @@ follower (currentTerm, voted, logEntries) (commitIndex, lastApplied) ctx peers t
 
 
 
-sendVoteRPC :: Context a -> RequestVote -> Term Remote -> Bool -> Process ()
+sendVoteRPC :: Context a b-> RequestVote -> Term Remote -> Bool -> Process ()
 sendVoteRPC ctx rv term voted = do
     let msg =  Rpc $ RspVoteRPC $ RspVote term voted
     sendRaftMsg ctx (candidateIdRV rv) msg
@@ -91,7 +95,7 @@ A candidate wins an election if it receives votes from
 a majority of the servers in the full cluster for the same
 term.
 -}
-candidateService :: RaftPersistentState -> RaftVolatileState -> Context a -> [ProcessId]  -> Process()
+candidateService :: RaftPersistentState -> RaftVolatileState -> Context a b -> [ProcessId]  -> Process()
 candidateService (term, voted, logEntries)  (commitIndex, lastApplied) ctx peers = do
     timeout <- getTimeout
     sPid <- getSelfPid
@@ -117,7 +121,7 @@ candidateService (term, voted, logEntries)  (commitIndex, lastApplied) ctx peers
 
 
 
-candidate :: RaftPersistentState -> RaftVolatileState ->  Context a -> [ProcessId] -> Int -> Int -> Process()
+candidate :: RaftPersistentState -> RaftVolatileState ->  Context a b-> [ProcessId] -> Int -> Int -> Process()
 candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) ctx peers votes timeout = do
     mMsg <- expectMsgTimeout ctx timeout -- expectTimeout timeout :: Process (Maybe RaftMsg)
     case mMsg of
@@ -131,7 +135,10 @@ candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) ctx peers
 
             candidateService (currentTerm,voted, logEntries)  (commitIndex, lastApplied) ctx peers
 
-        Just (RaftCommand _)  -> undefined
+        Just (RaftCommand _ _)  -> do
+            liftIO $ print "CAND"
+            candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) ctx peers votes timeout
+
 
         Just (Rpc m) -> case  m of
             RspVoteRPC sv -> do  -- TODO extrabt term to (Term, RCPMsg and pattern match)
@@ -183,11 +190,6 @@ candidate (currentTerm, voted, logEntries)  (commitIndex, lastApplied) ctx peers
 
 
 
-
---sendMsg :: ProcessId -> RaftMsg a -> Process ()
---sendMsg pid rpcMsg = send pid rpcMsg
-
-
 send2All ctx peers msg =
     mapM_ (\pid -> sendRaftMsg ctx pid msg) $ peers
 
@@ -201,7 +203,7 @@ getTimeout = do
     return $ T.after timeout T.Millis
 
 
-leadrService :: Term Current ->  Context a -> [ProcessId] -> Process()
+leadrService :: Term Current ->  Context a b -> [ProcessId] -> Process()
 leadrService currentTerm ctx peers = do
     {- Upon election: send initial empty AppendEntries RPCs
     (heartbeat) to each server; repeat during idle periods to
@@ -211,6 +213,7 @@ leadrService currentTerm ctx peers = do
     --heartBeat ctx peers (current2Remote currentTerm)
     sPid <- getSelfPid
     say $ "I am leader !!! ------- "
+    leader (currentTerm, []) (0, 0) (0,0) ctx peers
     return ()
 
 
@@ -218,7 +221,12 @@ leader st@(currentTerm, logEntries) (commitIndex, lastApplied) (nextIndex, match
     mMsg <- expectMsg ctx-- :: Process RaftMsg
 
     case mMsg of
-        (RaftCommand _) -> undefined
+        (RaftCommand clientPid _) -> do
+            liftIO $ print "GOT MSG"
+            rs <- stateMachineResp ctx
+            sendRspToClient ctx clientPid (ClientData rs)
+            return ()
+
         Rpc (RspVoteRPC rs) -> do
             {- If RPC request or response contains term T > currentTerm:
               set currentTerm = T, convert to follower (§5.1-}

@@ -18,7 +18,7 @@ import Data.Typeable (Typeable)
 import GHC.Generics (Generic)
 
 import qualified Raft.RaftProtocol as Raft
-
+import Raft.Client
 
 remotable ['Raft.start]
 
@@ -50,4 +50,7 @@ startRaft raftNodes =
 
       -- liftIO $ print (show peers)
        mapM_ (\p -> send p (Peers peers)) peers
+
+       spawnLocal (clientService peers)
+
        return ()
