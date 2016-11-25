@@ -225,8 +225,7 @@ candidate raftState peers votes timeout = do
                         convertToFreshFollower raftState remoteTerm peers
 
 
-convertToFreshFollower raftState remoteTerm peers = do --remoteTerm logEntries (nextIndex, matchIndex) peers   =
-     --followerService ((remmote2Current remoteTerm), False, logEntries) (nextIndex, matchIndex)  peers
+convertToFreshFollower raftState remoteTerm peers = do 
      let ct = remmote2Current remoteTerm
          updateTerm2Remote = updateTerm ct
          updateVote2False  = updateVoted False
