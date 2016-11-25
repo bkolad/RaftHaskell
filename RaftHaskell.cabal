@@ -39,6 +39,7 @@ executable RaftHaskell-exe
                      , heaps
                      , time
                      , bytestring
+                     , lens
 
   default-language:    Haskell2010
 

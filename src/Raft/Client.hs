@@ -12,14 +12,7 @@ clientService  peers = do
 
     send peer command
     client peers peer command 1000000
-    --send peer x
-    {--mA <- expectTimeout 1000 :: Process (Maybe CommandData)
-    case mA of
-        Nothing ->
-            clientService ps
-        Just a ->
-            client a
---}
+
 
 randomPeer peers = do
     let pSize = length peers
