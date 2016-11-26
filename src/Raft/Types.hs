@@ -37,21 +37,9 @@ instance Binary Peers
 data Current
 data Remote
 
--- Phantom Type
-data Term a = Term !Int
-    deriving (Eq, Show, Typeable, Generic)
-
-remmote2Current :: Term Remote -> Term Current
-remmote2Current (Term t) = Term t
-
-current2Remote :: Term Current -> Term Remote
-current2Remote (Term t) = Term t
-
-
-instance Binary (Term a)
 
 data RequestVote = RequestVote
-          { termRV         :: !(Term Remote)
+          { termRV         :: !Term
           , candidateIdRV  :: !ProcessId
           , lastLogIndexRV :: !Int
           , lastLogTermRV  :: !Int
@@ -63,7 +51,7 @@ instance Binary RequestVote
 
 
 data RspVote = RspVote
-              { termSV        :: !(Term Remote)
+              { termSV        :: !Term
               , voteGrantedSV :: !Bool
               }
               deriving (Eq, Show, Typeable, Generic)
@@ -73,11 +61,11 @@ instance Binary RspVote
 
 
 data AppendEntries a = AppendEntries
-    { termAE       :: !(Term Remote) -- TODO refactor term
+    { termAE       :: !Term
     , leaderId     :: !ProcessId
     , prevLogIndex :: !Int
-    , prevLogTerm  :: !(Term Remote)
-    , entries      :: !(Maybe [(Term Remote, a)]) --log entries to store (Nothing for heartbeat;
+    , prevLogTerm  :: !Term
+    , entries      :: ![(Term, a)] --log entries to store (Nothing for heartbeat;
     , leaderCommit :: !Int
     }
     deriving (Eq, Show, Typeable, Generic)
@@ -85,10 +73,21 @@ data AppendEntries a = AppendEntries
 instance Binary a => Binary (AppendEntries a)
 
 
+data RspAppendEntries = RspAppendEntries
+    { termRAE :: Int
+    , success :: Bool
+    }
+    deriving (Eq, Show, Typeable, Generic)
+
+
+instance Binary RspAppendEntries
+
+
 data RpcMsg a = ReqVoteRPC RequestVote
-            | RspVoteRPC RspVote
-            | AppendEntriesRPC (AppendEntries a)
-            deriving (Eq, Show, Typeable, Generic)
+              | RspVoteRPC RspVote
+              | AppendEntriesRPC (AppendEntries a)
+              | RspAppendEntriesRPC RspAppendEntries
+              deriving (Eq, Show, Typeable, Generic)
 
 
 instance Binary a => Binary (RpcMsg a)
@@ -121,7 +120,7 @@ data RaftMsg a = RaftCommand ProcessId a | Rpc (RpcMsg a)
 instance Binary a => Binary (RaftMsg a)
 
 
-data Context a b= Context
+data Context a b = Context
              { sendRaftMsg :: ProcessId -> RaftMsg a -> Process()
              , expectMsgTimeout :: Int -> Process (Maybe (RaftMsg a))
              , expectMsg :: Process (RaftMsg a)
@@ -149,14 +148,19 @@ data TermComparator = RemoteTermObsolete
                     | CurrentTermObsolete
 
 
-compareTerms :: Term Remote -> Term Current -> TermComparator
-compareTerms (Term remoteTerm) (Term currentTerm)
+compareTerms :: Term -> Term -> TermComparator
+compareTerms remoteTerm currentTerm
     | currentTerm >  remoteTerm = RemoteTermObsolete
     | currentTerm == remoteTerm = TermsEqual
     | currentTerm <  remoteTerm = CurrentTermObsolete
 
-type RaftPersistentState a = (Term Current, Bool, [a])
-type RaftVolatileState = (Int, Int)
+
+type Term = Int
+type RaftPersistentState a = (Term, Bool, [(Term, a)])
+
+type CommitIndex = Int
+type LastApplied = Int
+type RaftVolatileState = (CommitIndex, LastApplied)
 
 
 
@@ -176,4 +180,12 @@ updateVoted b rs =  set (persistentStateRS . _2) b rs
 
 updateTerm t rs = set (persistentStateRS . _1) t rs
 
+updateLogEntries le rs = set (persistentStateRS . _3) le rs
+
+addLogEntry e rs = over (persistentStateRS . _3) (\ls -> e:ls) rs
+
 getContext rs = rs ^. contextRS
+
+getCommitIndex rs = rs ^. (volatileStateRS . _1)
+
+getLastApplied rs = rs ^. (volatileStateRS . _2)

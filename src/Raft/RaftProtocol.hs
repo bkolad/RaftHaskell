@@ -20,7 +20,7 @@ import Raft.Types
 start ::  Process()
 start = do
     Peers peers <- expect :: Process Peers
-    let rs = RaftState ((Term 0), False, []) (0,0) context
+    let rs = RaftState (0, False, []) (0,0) context
     followerService rs peers
 
 followerService :: RaftState a b -> [ProcessId] -> Process()
@@ -68,14 +68,14 @@ follower raftState peers timeout = do
                 let remoteTerm = termRV rv
                 case compareTerms remoteTerm currentTerm of
                     RemoteTermObsolete -> do
-                        sendVoteRPC ctx rv (current2Remote currentTerm) False
+                        sendVoteRPC ctx rv currentTerm False
                         follower raftState peers timeout
 
                     -- TODO If election timeout elapses without receiving
                     -- AppendEntries RPC from current leader or granting vote
                     -- to candidate: convert to candidate. NOT EVRY TIME I GET REQVOT
                     TermsEqual -> do
-                        sendVoteRPC ctx rv (current2Remote currentTerm) (not (getVoted raftState))--(not voted)
+                        sendVoteRPC ctx rv currentTerm (not (getVoted raftState))--(not voted)
                         follower (updateVoted True raftState) peers timeout
 
                     CurrentTermObsolete -> do
@@ -83,21 +83,43 @@ follower raftState peers timeout = do
                         and vote yes! -}
                         sendVoteRPC ctx rv remoteTerm True
 
-                        let ct = remmote2Current remoteTerm
-                            updateTerm2Remote = updateTerm ct
+                        let updateTerm2Remote = updateTerm remoteTerm
                             updateVote2True   = updateVoted True
-                        let newState = ( updateVote2True
+                            newState = ( updateVote2True
                                        . updateTerm2Remote ) raftState
 
                         followerService newState peers
 
 
             AppendEntriesRPC ae -> do
-                let newState = updateTerm (remmote2Current (termAE ae)) raftState
+                let remoteTerm = termAE ae
+                case compareTerms remoteTerm currentTerm of
+                    RemoteTermObsolete -> do
+                        let rsp = Rpc $ RspAppendEntriesRPC $ RspAppendEntries currentTerm False
+                        sendRaftMsg ctx (leaderId ae) rsp
+                        followerService raftState peers
+
+
+                    TermsEqual -> do
+                        let ci = getCommitIndex raftState
+                            la = getLastApplied raftState
+
+
+                        followerService raftState peers
+
+
+                    CurrentTermObsolete -> do
+                        let newState = updateTerm remoteTerm raftState
+                        followerService newState peers
+
+
+                let newState = updateTerm (termAE ae) raftState
                 follower raftState peers timeout
 
+            RspAppendEntriesRPC rspAE -> undefined
 
-sendVoteRPC :: Context a b-> RequestVote -> Term Remote -> Bool -> Process ()
+
+sendVoteRPC :: Context a b -> RequestVote -> Term -> Bool -> Process ()
 sendVoteRPC ctx rv term voted = do
     let msg =  Rpc $ RspVoteRPC $ RspVote term voted
     sendRaftMsg ctx (candidateIdRV rv) msg
@@ -114,12 +136,12 @@ candidateService raftState peers = do
     timeout <- getTimeout
     sPid <- getSelfPid
     let term = getTerm raftState
-        currentTerm = succTerm term
+        currentTerm = term + 1
         ctx = getContext raftState
     {- Vote for self -}
-    voteForMyself sPid ctx (current2Remote currentTerm) -- TODO currentTerm - 1!
+    voteForMyself sPid ctx currentTerm -- TODO currentTerm - 1!
     {- Send RequestVote RPCs to all other servers -}
-    sendReqVote2All sPid ctx (current2Remote currentTerm) 0 0 peers
+    sendReqVote2All sPid ctx currentTerm 0 0 peers
     {- Increment currentTerm
        Reset election timer -}
 
@@ -139,8 +161,8 @@ candidateService raftState peers = do
             let msg = Rpc $ RspVoteRPC $ RspVote currentTerm True
             sendRaftMsg ctx sPid msg --sendMsg sPid msg
 
-        succTerm :: Term Current -> Term Current
-        succTerm (Term t) = Term (t+1)
+    --    succTerm :: Term Current -> Term Current
+    --    succTerm (Term t) = Term (t+1)
 
 
 
@@ -172,8 +194,7 @@ candidate raftState peers votes timeout = do
 
                 case compareTerms remoteTerm currentTerm of
                     CurrentTermObsolete -> do
-                        let ct = remmote2Current remoteTerm
-                            updateTerm2Remote = updateTerm ct
+                        let updateTerm2Remote = updateTerm remoteTerm
                             updateVote2False   = updateVoted False
 
                             newState = ( updateVote2False
@@ -224,10 +245,11 @@ candidate raftState peers votes timeout = do
                            and returns to follower state -}
                         convertToFreshFollower raftState remoteTerm peers
 
+            RspAppendEntriesRPC rspAE -> undefined
 
-convertToFreshFollower raftState remoteTerm peers = do 
-     let ct = remmote2Current remoteTerm
-         updateTerm2Remote = updateTerm ct
+
+convertToFreshFollower raftState remoteTerm peers = do
+     let updateTerm2Remote = updateTerm remoteTerm
          updateVote2False  = updateVoted False
 
          newState = ( updateVote2False
@@ -286,10 +308,14 @@ leader raftState (nextIndex, matchIndex) peers = do
             --send2All ctx peers (Rpc $ AppendEntriesRPC $ AppendEntries currentTerm leaderId prevLogIndex prevLogTerm entries leaderCommit)
 
             sPid <- getSelfPid
-        --    let newLE = c : logEntries
-        --        ae = AppendEntries (current2Remote currentTerm) sPid 0 undefined (Just [((current2Remote currentTerm ), c)]) 0
+            let newLe = (currentTerm, c)
+                newState = addLogEntry newLe raftState
+                ae = AppendEntries currentTerm sPid 0 0 ([(currentTerm, c)]) 0
 
-            return ()
+            send2All ctx (filter (/=sPid) peers) (Rpc $ AppendEntriesRPC ae)
+            leader raftState (nextIndex, matchIndex) peers
+
+                --where mkAe currentTerm sPid =
 
         Rpc (RspVoteRPC rs) -> do
             {- If RPC request or response contains term T > currentTerm:
@@ -318,6 +344,8 @@ leader raftState (nextIndex, matchIndex) peers = do
             undefined
 
 
+        Rpc (RspAppendEntriesRPC rspAE) -> undefined
+
 
 
 
@@ -337,5 +365,3 @@ expectWithTimeout timeout = do
                 return  Nothing
             else
                 return $ Just (newTimeOut, x)
-
---dT :: Int
